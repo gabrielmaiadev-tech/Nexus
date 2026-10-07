@@ -1,0 +1,106 @@
+name: syncspace
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-syncspace}
+      POSTGRES_USER: ${POSTGRES_USER:-syncspace}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-syncspace_dev}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - syncspace
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-syncspace_redis_dev}"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-syncspace_redis_dev}
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - syncspace
+    restart: unless-stopped
+
+  api:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    command: ["npm", "run", "start:dev"]
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-syncspace}:${POSTGRES_PASSWORD:-syncspace_dev}@postgres:5432/${POSTGRES_DB:-syncspace}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-syncspace_redis_dev}
+      JWT_SECRET: ${JWT_SECRET:-syncspace-local-secret-change-me-32chars}
+      JWT_ISSUER: ${JWT_ISSUER:-syncspace-api}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-syncspace-clients}
+      WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:5173}
+    ports:
+      - "${API_PORT:-3000}:3000"
+    volumes:
+      - ./apps/api:/app
+      - api_node_modules:/app/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - syncspace
+    restart: unless-stopped
+
+  worker:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    command: ["npm", "run", "start:worker:dev"]
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://${POSTGRES_USER:-syncspace}:${POSTGRES_PASSWORD:-syncspace_dev}@postgres:5432/${POSTGRES_DB:-syncspace}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-syncspace_redis_dev}
+      JWT_SECRET: ${JWT_SECRET:-syncspace-local-secret-change-me-32chars}
+      JWT_ISSUER: ${JWT_ISSUER:-syncspace-api}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-syncspace-clients}
+    volumes:
+      - ./apps/api:/app
+      - api_node_modules:/app/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - syncspace
+    restart: unless-stopped
+
+networks:
+  syncspace:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  api_node_modules:
